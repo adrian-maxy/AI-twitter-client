@@ -166,6 +166,7 @@ export async function createCreateTweetRequest(
   text: string,
   auth: TwitterAuth,
   tweetId?: string,
+  mediaData?: Buffer[],
 ) {
   const onboardingTaskUrl = 'https://api.twitter.com/1.1/onboarding/task.json';
 
@@ -189,9 +190,23 @@ export async function createCreateTweetRequest(
   const variables: Record<string, any> = {
     tweet_text: text,
     dark_request: false,
-    media: { media_entities: [], possibly_sensitive: false },
+    media: {
+      media_entities: [],
+      possibly_sensitive: false,
+    },
     semantic_annotation_ids: [],
   };
+
+  if (mediaData && mediaData.length > 0) {
+    const mediaIds = await Promise.all(
+      mediaData.map((data) => uploadMedia(data, auth)),
+    );
+
+    variables.media.media_entities = mediaIds.map((id) => ({
+      media_id: id,
+      tagged_users: [],
+    }));
+  }
 
   if (tweetId) {
     variables.reply = { in_reply_to_tweet_id: tweetId };
@@ -487,4 +502,49 @@ export async function getTweetAnonymous(
   }
 
   return parseTimelineEntryItemContentRaw(res.value.data, id);
+}
+
+interface MediaUploadResponse {
+  media_id_string: string;
+  size: number;
+  expires_after_secs: number;
+  image: {
+    image_type: string;
+    w: number;
+    h: number;
+  };
+}
+
+async function uploadMedia(
+  mediaData: Buffer,
+  auth: TwitterAuth,
+): Promise<string> {
+  const onboardingTaskUrl = 'https://upload.twitter.com/1.1/media/upload.json';
+
+  const cookies = await auth.cookieJar().getCookies(onboardingTaskUrl);
+  const xCsrfToken = cookies.find((cookie) => cookie.key === 'ct0');
+
+  const form = new FormData();
+  form.append('media', new Blob([mediaData]));
+
+  const headers = new Headers({
+    authorization: `Bearer ${(auth as any).bearerToken}`,
+    cookie: await auth.cookieJar().getCookieString(onboardingTaskUrl),
+    'x-csrf-token': xCsrfToken?.value as string,
+  });
+
+  const response = await fetch(onboardingTaskUrl, {
+    method: 'POST',
+    headers,
+    body: form,
+  });
+
+  await updateCookieJar(auth.cookieJar(), response.headers);
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  const data: MediaUploadResponse = await response.json();
+  return data.media_id_string;
 }
