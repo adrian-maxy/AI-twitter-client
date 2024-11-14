@@ -1,6 +1,8 @@
 import { getScraper } from './test-utils';
 import { QueryTweetsResponse } from './timeline-v1';
 import { Mention, Tweet } from './tweets';
+import fs from 'fs';
+import path from 'path';
 
 let shouldSkipV2Tests = false;
 beforeAll(() => {
@@ -441,3 +443,19 @@ test('scraper can create a poll with sendTweetV2', async () => {
     pollData?.poll.options.map((option) => option.label),
   );
 });
+
+test('sendTweetWithMedia successfully sends a tweet with media', async () => {
+  const scraper = await getScraper();
+  const draftText = 'Test tweet with media ' + Date.now().toString();
+
+  // Read a test image file
+
+  const imageBuffer = fs.readFileSync(
+    path.join(__dirname, '../test-assets/test-image.jpeg'),
+  );
+
+  const result = await scraper.sendTweetWithMedia(draftText, [imageBuffer]);
+
+  console.log('Send tweet with media result:', result);
+  expect(result.ok).toBeTruthy();
+}, 30000);
