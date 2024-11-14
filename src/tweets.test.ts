@@ -2,6 +2,27 @@ import { getScraper } from './test-utils';
 import { QueryTweetsResponse } from './timeline-v1';
 import { Mention, Tweet } from './tweets';
 
+let shouldSkipV2Tests = false;
+beforeAll(() => {
+  const {
+    TWITTER_API_KEY,
+    TWITTER_API_SECRET_KEY,
+    TWITTER_ACCESS_TOKEN,
+    TWITTER_ACCESS_TOKEN_SECRET,
+  } = process.env;
+  if (
+    !TWITTER_API_KEY ||
+    !TWITTER_API_SECRET_KEY ||
+    !TWITTER_ACCESS_TOKEN ||
+    !TWITTER_ACCESS_TOKEN_SECRET
+  ) {
+    console.warn(
+      'Skipping tests: Twitter API v2 keys are not available in environment variables.',
+    );
+    shouldSkipV2Tests = true;
+  }
+});
+
 test('scraper can get tweet', async () => {
   const expected: Tweet = {
     conversationId: '1585338303800578049',
@@ -343,4 +364,80 @@ test('sendTweet successfully sends a tweet', async () => {
     '1430277451452751874',
   );
   console.log('Send reply result:', replyResult);
+});
+
+test('scraper can get a tweet with getTweetV2', async () => {
+  const scraper = await getScraper({ authMethod: 'api' });
+  if (shouldSkipV2Tests) {
+    return console.warn("Skipping 'getTweetV2' test due to missing API keys.");
+  }
+  const tweetId = '1856441982811529619';
+
+  const tweet: Tweet | null = await scraper.getTweetV2(tweetId);
+
+  expect(tweet).not.toBeNull();
+  expect(tweet?.id).toEqual(tweetId);
+  expect(tweet?.text).toBeDefined();
+});
+
+test('scraper can get multiple tweets with getTweetsV2', async () => {
+  if (shouldSkipV2Tests) {
+    return console.warn("Skipping 'getTweetV2' test due to missing API keys.");
+  }
+  const scraper = await getScraper({ authMethod: 'api' });
+  const tweetIds = ['1856441982811529619', '1856429655215260130'];
+
+  const tweets = await scraper.getTweetsV2(tweetIds);
+
+  expect(tweets).toBeDefined();
+  expect(tweets.length).toBeGreaterThan(0);
+  tweets.forEach((tweet) => {
+    expect(tweet.id).toBeDefined();
+    expect(tweet.text).toBeDefined();
+  });
+});
+
+test('scraper can send a tweet with sendTweetV2', async () => {
+  if (shouldSkipV2Tests) {
+    return console.warn("Skipping 'getTweetV2' test due to missing API keys.");
+  }
+  const scraper = await getScraper({ authMethod: 'api' });
+  const tweetText = `Automated test tweet at ${Date.now()}`;
+
+  const response = await scraper.sendTweetV2(tweetText);
+  expect(response).not.toBeNull();
+  expect(response?.id).toBeDefined();
+  expect(response?.text).toEqual(tweetText);
+});
+
+test('scraper can create a poll with sendTweetV2', async () => {
+  if (shouldSkipV2Tests) {
+    return console.warn("Skipping 'getTweetV2' test due to missing API keys.");
+  }
+
+  const scraper = await getScraper({ authMethod: 'api' });
+  const tweetText = `When do you think we'll achieve AGI (Artificial General Intelligence)? 🤖 Cast your prediction!`;
+  const pollData = {
+    poll: {
+      options: [
+        { label: '2025 🗓️' },
+        { label: '2026 📅' },
+        { label: '2027 🛠️' },
+        { label: '2030+ 🚀' },
+      ],
+      duration_minutes: 1440,
+    },
+  };
+  const response = await scraper.sendTweetV2(tweetText, undefined, pollData);
+
+  expect(response).not.toBeNull();
+  expect(response?.id).toBeDefined();
+  expect(response?.text).toEqual(tweetText);
+
+  // Validate poll structure in response
+  const poll = response?.poll;
+  expect(poll).toBeDefined();
+  expect(poll?.options.map((option) => option.label)).toEqual(
+    pollData?.poll.options.map((option) => option.label),
+  );
 });
