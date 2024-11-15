@@ -14,7 +14,99 @@ import { getTweetTimeline } from './timeline-async';
 import { apiRequestFactory } from './api-data';
 import { ListTimeline, parseListTimelineTweets } from './timeline-list';
 import { updateCookieJar } from './requests';
+import {
+  ApiV2Includes,
+  MediaObjectV2,
+  PlaceV2,
+  PollV2,
+  TTweetv2Expansion,
+  TTweetv2MediaField,
+  TTweetv2PlaceField,
+  TTweetv2PollField,
+  TTweetv2TweetField,
+  TTweetv2UserField,
+  TweetV2,
+  UserV2,
+} from 'twitter-api-v2';
 
+export const defaultOptions = {
+  expansions: [
+    'attachments.poll_ids',
+    'attachments.media_keys',
+    'author_id',
+    'referenced_tweets.id',
+    'in_reply_to_user_id',
+    'edit_history_tweet_ids',
+    'geo.place_id',
+    'entities.mentions.username',
+    'referenced_tweets.id.author_id',
+  ] as TTweetv2Expansion[],
+  tweetFields: [
+    'attachments',
+    'author_id',
+    'context_annotations',
+    'conversation_id',
+    'created_at',
+    'entities',
+    'geo',
+    'id',
+    'in_reply_to_user_id',
+    'lang',
+    'public_metrics',
+    'edit_controls',
+    'possibly_sensitive',
+    'referenced_tweets',
+    'reply_settings',
+    'source',
+    'text',
+    'withheld',
+    'note_tweet',
+  ] as TTweetv2TweetField[],
+  pollFields: [
+    'duration_minutes',
+    'end_datetime',
+    'id',
+    'options',
+    'voting_status',
+  ] as TTweetv2PollField[],
+  mediaFields: [
+    'duration_ms',
+    'height',
+    'media_key',
+    'preview_image_url',
+    'type',
+    'url',
+    'width',
+    'public_metrics',
+    'alt_text',
+    'variants',
+  ] as TTweetv2MediaField[],
+  userFields: [
+    'created_at',
+    'description',
+    'entities',
+    'id',
+    'location',
+    'name',
+    'profile_image_url',
+    'protected',
+    'public_metrics',
+    'url',
+    'username',
+    'verified',
+    'withheld',
+  ] as TTweetv2UserField[],
+  placeFields: [
+    'contained_within',
+    'country',
+    'country_code',
+    'full_name',
+    'geo',
+    'id',
+    'name',
+    'place_type',
+  ] as TTweetv2PlaceField[],
+};
 export interface Mention {
   id: string;
   username?: string;
@@ -44,6 +136,20 @@ export interface PlaceRaw {
     type?: string;
     coordinates?: number[][][];
   };
+}
+
+export interface PollData {
+  id?: string;
+  end_datetime?: string;
+  voting_status?: string;
+  duration_minutes: number;
+  options: PollOption[];
+}
+
+export interface PollOption {
+  position?: number;
+  label: string;
+  votes?: number;
 }
 
 /**
@@ -84,6 +190,7 @@ export interface Tweet {
   videos: Video[];
   views?: number;
   sensitiveContent?: boolean;
+  poll?: PollV2 | null;
 }
 
 export type TweetQuery =
@@ -160,6 +267,176 @@ export async function fetchTweetsAndReplies(
   }
 
   return parseTimelineTweetsV2(res.value);
+}
+
+export async function createCreateTweetRequestV2(
+  text: string,
+  auth: TwitterAuth,
+  tweetId?: string,
+  options?: {
+    poll?: PollData;
+  },
+) {
+  const v2client = auth.getV2Client();
+  if (v2client == null) {
+    throw new Error('V2 client is not initialized');
+  }
+  const { poll } = options || {};
+  let tweetConfig;
+  if (poll) {
+    tweetConfig = {
+      text,
+      poll: {
+        options: poll?.options.map((option) => option.label) ?? [],
+        duration_minutes: poll?.duration_minutes ?? 60,
+      },
+    };
+  } else if (tweetId) {
+    tweetConfig = {
+      text,
+      reply: {
+        in_reply_to_tweet_id: tweetId,
+      },
+    };
+  } else {
+    tweetConfig = {
+      text,
+    };
+  }
+  const tweetResponse = await v2client.v2.tweet(tweetConfig);
+  let optionsConfig = {};
+  if (options?.poll) {
+    optionsConfig = {
+      expansions: ['attachments.poll_ids'],
+      pollFields: [
+        'options',
+        'duration_minutes',
+        'end_datetime',
+        'voting_status',
+      ],
+    };
+  }
+  return await getTweetV2(tweetResponse.data.id, auth, optionsConfig);
+}
+
+export function parseTweetV2ToV1(
+  tweetV2: TweetV2,
+  includes?: ApiV2Includes,
+  defaultTweetData?: Tweet | null,
+): Tweet {
+  let parsedTweet: Tweet;
+  if (defaultTweetData != null) {
+    parsedTweet = defaultTweetData;
+  }
+  parsedTweet = {
+    id: tweetV2.id,
+    text: tweetV2.text ?? defaultTweetData?.text ?? '',
+    hashtags:
+      tweetV2.entities?.hashtags?.map((tag) => tag.tag) ??
+      defaultTweetData?.hashtags ??
+      [],
+    mentions:
+      tweetV2.entities?.mentions?.map((mention) => ({
+        id: mention.id,
+        username: mention.username,
+      })) ??
+      defaultTweetData?.mentions ??
+      [],
+    urls:
+      tweetV2.entities?.urls?.map((url) => url.url) ??
+      defaultTweetData?.urls ??
+      [],
+    likes: tweetV2.public_metrics?.like_count ?? defaultTweetData?.likes ?? 0,
+    retweets:
+      tweetV2.public_metrics?.retweet_count ?? defaultTweetData?.retweets ?? 0,
+    replies:
+      tweetV2.public_metrics?.reply_count ?? defaultTweetData?.replies ?? 0,
+    views:
+      tweetV2.public_metrics?.impression_count ?? defaultTweetData?.views ?? 0,
+    userId: tweetV2.author_id ?? defaultTweetData?.userId,
+    conversationId: tweetV2.conversation_id ?? defaultTweetData?.conversationId,
+    photos: defaultTweetData?.photos ?? [],
+    videos: defaultTweetData?.videos ?? [],
+    poll: defaultTweetData?.poll ?? null,
+    username: defaultTweetData?.username ?? '',
+    name: defaultTweetData?.name ?? '',
+    place: defaultTweetData?.place,
+    thread: defaultTweetData?.thread ?? [],
+  };
+
+  // Process Polls
+  if (includes?.polls?.length) {
+    const poll = includes.polls[0];
+    parsedTweet.poll = {
+      id: poll.id,
+      end_datetime: poll.end_datetime
+        ? poll.end_datetime
+        : defaultTweetData?.poll?.end_datetime
+        ? defaultTweetData?.poll?.end_datetime
+        : undefined,
+      options: poll.options.map((option) => ({
+        position: option.position,
+        label: option.label,
+        votes: option.votes,
+      })),
+      voting_status:
+        poll.voting_status ?? defaultTweetData?.poll?.voting_status,
+    };
+  }
+
+  // Process Media (photos and videos)
+  if (includes?.media?.length) {
+    includes.media.forEach((media: MediaObjectV2) => {
+      if (media.type === 'photo') {
+        parsedTweet.photos.push({
+          id: media.media_key,
+          url: media.url ?? '',
+          alt_text: media.alt_text ?? '',
+        });
+      } else if (media.type === 'video' || media.type === 'animated_gif') {
+        parsedTweet.videos.push({
+          id: media.media_key,
+          preview: media.preview_image_url ?? '',
+          url:
+            media.variants?.find(
+              (variant) => variant.content_type === 'video/mp4',
+            )?.url ?? '',
+        });
+      }
+    });
+  }
+
+  // Process User (for author info)
+  if (includes?.users?.length) {
+    const user = includes.users.find(
+      (user: UserV2) => user.id === tweetV2.author_id,
+    );
+    if (user) {
+      parsedTweet.username = user.username ?? defaultTweetData?.username ?? '';
+      parsedTweet.name = user.name ?? defaultTweetData?.name ?? '';
+    }
+  }
+
+  // Process Place (if any)
+  if (tweetV2?.geo?.place_id && includes?.places?.length) {
+    const place = includes.places.find(
+      (place: PlaceV2) => place.id === tweetV2?.geo?.place_id,
+    );
+    if (place) {
+      parsedTweet.place = {
+        id: place.id,
+        full_name: place.full_name ?? defaultTweetData?.place?.full_name ?? '',
+        country: place.country ?? defaultTweetData?.place?.country ?? '',
+        country_code:
+          place.country_code ?? defaultTweetData?.place?.country_code ?? '',
+        name: place.name ?? defaultTweetData?.place?.name ?? '',
+        place_type: place.place_type ?? defaultTweetData?.place?.place_type,
+      };
+    }
+  }
+
+  // TODO: Process Thread (referenced tweets) and remove reference to v1
+  return parsedTweet;
 }
 
 export async function createCreateTweetRequest(
@@ -478,6 +755,97 @@ export async function getTweet(
 
   const tweets = parseThreadedConversation(res.value);
   return tweets.find((tweet) => tweet.id === id) ?? null;
+}
+
+export async function getTweetV2(
+  id: string,
+  auth: TwitterAuth,
+  options: {
+    expansions?: TTweetv2Expansion[];
+    tweetFields?: TTweetv2TweetField[];
+    pollFields?: TTweetv2PollField[];
+    mediaFields?: TTweetv2MediaField[];
+    userFields?: TTweetv2UserField[];
+    placeFields?: TTweetv2PlaceField[];
+  } = defaultOptions,
+): Promise<Tweet | null> {
+  const v2client = auth.getV2Client();
+  if (!v2client) {
+    throw new Error('V2 client is not initialized');
+  }
+
+  try {
+    const tweetData = await v2client.v2.singleTweet(id, {
+      expansions: options?.expansions,
+      'tweet.fields': options?.tweetFields,
+      'poll.fields': options?.pollFields,
+      'media.fields': options?.mediaFields,
+      'user.fields': options?.userFields,
+      'place.fields': options?.placeFields,
+    });
+
+    if (!tweetData?.data) {
+      console.warn(`Tweet data not found for ID: ${id}`);
+      return null;
+    }
+
+    const defaultTweetData = await getTweet(tweetData.data.id, auth);
+    // Extract primary tweet data
+    const parsedTweet = parseTweetV2ToV1(
+      tweetData.data,
+      tweetData?.includes,
+      defaultTweetData,
+    );
+
+    return parsedTweet;
+  } catch (error) {
+    console.error(`Error fetching tweet ${id}:`, error);
+    return null;
+  }
+}
+
+export async function getTweetsV2(
+  ids: string[],
+  auth: TwitterAuth,
+  options: {
+    expansions?: TTweetv2Expansion[];
+    tweetFields?: TTweetv2TweetField[];
+    pollFields?: TTweetv2PollField[];
+    mediaFields?: TTweetv2MediaField[];
+    userFields?: TTweetv2UserField[];
+    placeFields?: TTweetv2PlaceField[];
+  } = defaultOptions,
+): Promise<Tweet[]> {
+  const v2client = auth.getV2Client();
+  if (!v2client) {
+    return [];
+  }
+
+  try {
+    const tweetData = await v2client.v2.tweets(ids, {
+      expansions: options?.expansions,
+      'tweet.fields': options?.tweetFields,
+      'poll.fields': options?.pollFields,
+      'media.fields': options?.mediaFields,
+      'user.fields': options?.userFields,
+      'place.fields': options?.placeFields,
+    });
+    const tweetsV2 = tweetData.data;
+    if (tweetsV2.length === 0) {
+      console.warn(`No tweet data found for IDs: ${ids.join(', ')}`);
+      return [];
+    }
+    return (
+      await Promise.all(
+        tweetsV2.map(
+          async (tweet) => await getTweetV2(tweet.id, auth, options),
+        ),
+      )
+    ).filter((tweet): tweet is Tweet => tweet !== null);
+  } catch (error) {
+    console.error(`Error fetching tweets for IDs: ${ids.join(', ')}`, error);
+    return [];
+  }
 }
 
 export async function getTweetAnonymous(
