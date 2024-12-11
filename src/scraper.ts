@@ -482,6 +482,14 @@ export class Scraper {
     );
   }
 
+  async sendNoteTweet(
+    text: string,
+    replyToTweetId?: string,
+    mediaData?: { data: Buffer; mediaType: string }[],
+  ) {
+    return await createCreateNoteTweetRequest(text, this.auth, replyToTweetId, mediaData);
+  }
+
   /**
    * Send a tweet
    * @param text The text of the tweet
